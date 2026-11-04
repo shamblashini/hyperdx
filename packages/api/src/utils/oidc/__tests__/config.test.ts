@@ -11,6 +11,8 @@ const baseEnv: OidcEnv = {
   teamMapping: '{"hdx-platform":"Platform","hdx-payments":"Payments"}',
   teamGroupPrefix: '',
   sessionMaxAgeHours: '',
+  identityMaxAgeHours: '',
+  revalidateIntervalMinutes: '',
   allowInsecureHttp: false,
   frontendUrl: 'https://hyperdx.example.com/',
 };
@@ -23,10 +25,12 @@ describe('parseOidcSettings', () => {
   it('applies defaults and derives the redirect URI from FRONTEND_URL', () => {
     const settings = parseOidcSettings(baseEnv);
     expect(settings).toMatchObject({
-      scopes: 'openid email profile',
+      scopes: 'openid email profile offline_access',
       groupsClaim: 'groups',
       displayName: 'SSO',
       sessionMaxAgeMs: 24 * 60 * 60 * 1000,
+      identityMaxAgeMs: 24 * 60 * 60 * 1000,
+      revalidateIntervalMs: 15 * 60 * 1000,
     });
     expect(settings?.redirectUri.href).toBe(
       'https://hyperdx.example.com/api/login/oidc/callback',
@@ -49,6 +53,11 @@ describe('parseOidcSettings', () => {
     [{ teamMapping: '' }, /OIDC_TEAM_MAPPING or OIDC_TEAM_GROUP_PREFIX/],
     [{ scopes: 'email profile' }, /must include "openid"/],
     [{ sessionMaxAgeHours: '-1' }, /non-negative/],
+    [{ identityMaxAgeHours: '0' }, /must be above 0/],
+    [
+      { identityMaxAgeHours: '1', revalidateIntervalMinutes: '30' },
+      /at most a third/,
+    ],
     [{ issuerUrl: 'http://auth.local/' }, /must use https/],
     [{ frontendUrl: '' }, /OIDC_REDIRECT_URI or FRONTEND_URL/],
   ])('rejects %j', (override, message) => {

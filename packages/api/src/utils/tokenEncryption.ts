@@ -107,6 +107,11 @@ function getProvider(name: string): TokenEncryptionProvider {
   return provider;
 }
 
+/** False when tokens would be stored in plain text. */
+export function isTokenEncryptionEnabled(): boolean {
+  return activeProvider.name !== NONE_PROVIDER;
+}
+
 export function isTokenEnvelope(value: string): boolean {
   return ENVELOPE_PATTERN.test(value);
 }

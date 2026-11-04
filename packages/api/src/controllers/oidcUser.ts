@@ -5,6 +5,10 @@ import { setupTeamDefaults } from '@/setupDefaults';
 import { isDuplicateKeyError } from '@/utils/errors';
 import logger from '@/utils/logger';
 import type { OidcIdentity, TeamTarget } from '@/utils/oidc/claims';
+import {
+  encryptToken,
+  isTokenEncryptionEnabled,
+} from '@/utils/tokenEncryption';
 
 export type OidcLoginRejection =
   // A password account has this email but the IdP has not verified it, so
@@ -21,6 +25,19 @@ export class OidcLoginRejectedError extends Error {
 }
 
 export type OidcProvisionOutcome = 'created' | 'linked' | 'existing';
+
+async function findExistingUser(
+  identity: OidcIdentity,
+): Promise<{ user: UserDocument; outcome: OidcProvisionOutcome }> {
+  const user = await User.findOne({
+    oidcIssuer: identity.issuer,
+    oidcSubject: identity.subject,
+  });
+  if (user == null) {
+    throw new OidcUserGoneError();
+  }
+  return { user, outcome: 'existing' };
+}
 
 async function findOrLinkUser(
   identity: OidcIdentity,
@@ -73,21 +90,79 @@ async function findOrLinkUser(
   return { user: created, outcome: 'created' };
 }
 
+export type OidcConfirmation =
+  // A login may create or link the account. Without a refresh token in the
+  // response the IdP no longer issues one, so any stored token is dropped.
+  | { source: 'login'; refreshToken?: string }
+  // A revalidation only updates an existing account: one an admin deleted
+  // while its refresh was in flight must stay deleted. A refresh that does not
+  // rotate the token returns none, and the stored one stays valid.
+  | { source: 'revalidation'; refreshToken?: string };
+
+export class OidcUserGoneError extends Error {
+  constructor() {
+    super('OIDC user no longer exists');
+    this.name = 'OidcUserGoneError';
+  }
+}
+
+let warnedPlaintextRefreshToken = false;
+
+async function applyRefreshToken(
+  user: UserDocument,
+  { source, refreshToken: token }: OidcConfirmation,
+) {
+  if (token == null) {
+    if (source === 'login') {
+      user.oidcRefreshToken = undefined;
+    }
+    return;
+  }
+  // A refresh token is a long-lived credential for the user at the IdP;
+  // never store it in plain text. Without it the user simply has to log in
+  // again once OIDC_IDENTITY_MAX_AGE_HOURS passes.
+  if (!isTokenEncryptionEnabled()) {
+    if (!warnedPlaintextRefreshToken) {
+      warnedPlaintextRefreshToken = true;
+      logger.warn(
+        'OIDC refresh tokens are not stored because TOKEN_ENCRYPTION_KEY is unset; users must log in again every OIDC_IDENTITY_MAX_AGE_HOURS',
+      );
+    }
+    user.oidcRefreshToken = undefined;
+    return;
+  }
+  user.oidcRefreshToken = await encryptToken(token);
+}
+
 /**
  * Finds or creates the HyperDX user for an OIDC identity and puts them in the
  * team their groups map to. The IdP is the source of truth: team, name and
- * email are re-synced on every login, so moving someone between groups in the
- * IdP moves them between teams here at their next login.
+ * email are re-synced on every login and revalidation, so moving someone
+ * between groups in the IdP moves them between teams here.
+ *
+ * Also records that the IdP vouched for the user just now, which is what
+ * keeps their sessions and access key working (middleware/auth.ts).
  */
 export async function provisionOidcUser(
   identity: OidcIdentity,
   target: TeamTarget,
+  confirmation: OidcConfirmation,
 ): Promise<{
   user: UserDocument;
   outcome: OidcProvisionOutcome;
   teamCreated: boolean;
   teamChanged: boolean;
 }> {
+  if (confirmation.source === 'revalidation') {
+    const exists = await User.exists({
+      oidcIssuer: identity.issuer,
+      oidcSubject: identity.subject,
+    });
+    if (!exists) {
+      throw new OidcUserGoneError();
+    }
+  }
+
   const { team, created: teamCreated } =
     await findOrCreateTeamForOidcGroup(target);
   if (teamCreated) {
@@ -99,7 +174,10 @@ export async function provisionOidcUser(
     }
   }
 
-  const { user, outcome } = await findOrLinkUser(identity, team._id);
+  const { user, outcome } =
+    confirmation.source === 'login'
+      ? await findOrLinkUser(identity, team._id)
+      : await findExistingUser(identity);
 
   const teamChanged = user.team?.toString() !== team._id.toString();
   user.team = team._id;
@@ -119,9 +197,9 @@ export async function provisionOidcUser(
     }
   }
 
-  if (user.isModified()) {
-    await user.save();
-  }
+  user.oidcVerifiedAt = new Date(Date.now());
+  await applyRefreshToken(user, confirmation);
+  await user.save();
 
   return {
     user,

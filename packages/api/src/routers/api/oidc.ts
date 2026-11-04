@@ -114,7 +114,11 @@ router.get('/login/oidc/callback', async (req, res, next) => {
 
   try {
     await withSpan('oidc.login.callback', async span => {
-      const identity = await completeOidcLogin(settings, pending, query);
+      const { identity, refreshToken } = await completeOidcLogin(
+        settings,
+        pending,
+        query,
+      );
       span.setAttributes({
         'oidc.issuer': identity.issuer,
         'oidc.email_verified': identity.emailVerified,
@@ -132,7 +136,10 @@ router.get('/login/oidc/callback', async (req, res, next) => {
       }
 
       const { user, outcome, teamCreated, teamChanged } =
-        await provisionOidcUser(identity, target);
+        await provisionOidcUser(identity, target, {
+          source: 'login',
+          refreshToken,
+        });
 
       setBusinessContext({
         teamId: user.team?.toString(),
@@ -146,6 +153,7 @@ router.get('/login/oidc/callback', async (req, res, next) => {
         'oidc.team.group': target.group,
         'oidc.team.created': teamCreated,
         'oidc.team.changed': teamChanged,
+        'oidc.refresh_token.issued': refreshToken != null,
       });
       logger.info(
         {

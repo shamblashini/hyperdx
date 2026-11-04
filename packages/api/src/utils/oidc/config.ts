@@ -2,10 +2,13 @@ import { z } from 'zod';
 
 import * as config from '@/config';
 
-const DEFAULT_SCOPES = 'openid email profile';
+// offline_access asks for a refresh token, which revalidation needs.
+const DEFAULT_SCOPES = 'openid email profile offline_access';
 const DEFAULT_GROUPS_CLAIM = 'groups';
 const DEFAULT_DISPLAY_NAME = 'SSO';
 const DEFAULT_SESSION_MAX_AGE_HOURS = 24;
+const DEFAULT_IDENTITY_MAX_AGE_HOURS = 24;
+const DEFAULT_REVALIDATE_INTERVAL_MINUTES = 15;
 
 // JSON object of IdP group -> HyperDX team name. Key order is significant: a
 // user in several mapped groups lands in the team of the first one listed.
@@ -28,6 +31,11 @@ export type OidcSettings = {
   teamMapping: TeamMappingEntry[];
   teamGroupPrefix: string;
   sessionMaxAgeMs: number;
+  // How long after the IdP last vouched for a user (login or refresh) their
+  // sessions and access key keep working.
+  identityMaxAgeMs: number;
+  // How often each user is re-checked with the IdP; 0 turns revalidation off.
+  revalidateIntervalMs: number;
   allowInsecureHttp: boolean;
 };
 
@@ -42,6 +50,8 @@ export type OidcEnv = {
   teamMapping: string;
   teamGroupPrefix: string;
   sessionMaxAgeHours: string;
+  identityMaxAgeHours: string;
+  revalidateIntervalMinutes: string;
   allowInsecureHttp: boolean;
   frontendUrl: string;
 };
@@ -59,6 +69,17 @@ function parseUrl(name: string, value: string): URL {
   } catch {
     throw new OidcConfigError(`${name} is not a valid URL`);
   }
+}
+
+function parseDuration(name: string, raw: string, fallback: number) {
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new OidcConfigError(`${name} must be a non-negative number`);
+  }
+  return value;
 }
 
 /**
@@ -127,14 +148,30 @@ export function parseOidcSettings(env: OidcEnv): OidcSettings | null {
     );
   }
 
-  let sessionMaxAgeHours = DEFAULT_SESSION_MAX_AGE_HOURS;
-  if (env.sessionMaxAgeHours) {
-    sessionMaxAgeHours = Number(env.sessionMaxAgeHours);
-    if (!Number.isFinite(sessionMaxAgeHours) || sessionMaxAgeHours < 0) {
-      throw new OidcConfigError(
-        'OIDC_SESSION_MAX_AGE_HOURS must be a non-negative number',
-      );
-    }
+  const sessionMaxAgeHours = parseDuration(
+    'OIDC_SESSION_MAX_AGE_HOURS',
+    env.sessionMaxAgeHours,
+    DEFAULT_SESSION_MAX_AGE_HOURS,
+  );
+  const identityMaxAgeHours = parseDuration(
+    'OIDC_IDENTITY_MAX_AGE_HOURS',
+    env.identityMaxAgeHours,
+    DEFAULT_IDENTITY_MAX_AGE_HOURS,
+  );
+  if (identityMaxAgeHours === 0) {
+    throw new OidcConfigError('OIDC_IDENTITY_MAX_AGE_HOURS must be above 0');
+  }
+  const revalidateIntervalMinutes = parseDuration(
+    'OIDC_REVALIDATE_INTERVAL_MINUTES',
+    env.revalidateIntervalMinutes,
+    DEFAULT_REVALIDATE_INTERVAL_MINUTES,
+  );
+  // Each user needs room for a few attempts inside the max age, or one slow
+  // IdP response would lock them out.
+  if (revalidateIntervalMinutes * 3 > identityMaxAgeHours * 60) {
+    throw new OidcConfigError(
+      'OIDC_REVALIDATE_INTERVAL_MINUTES must be at most a third of OIDC_IDENTITY_MAX_AGE_HOURS',
+    );
   }
 
   const scopes = env.scopes.trim() || DEFAULT_SCOPES;
@@ -153,6 +190,8 @@ export function parseOidcSettings(env: OidcEnv): OidcSettings | null {
     teamMapping,
     teamGroupPrefix,
     sessionMaxAgeMs: sessionMaxAgeHours * 60 * 60 * 1000,
+    identityMaxAgeMs: identityMaxAgeHours * 60 * 60 * 1000,
+    revalidateIntervalMs: revalidateIntervalMinutes * 60 * 1000,
     allowInsecureHttp: env.allowInsecureHttp,
   };
 }
@@ -168,6 +207,8 @@ export const oidcSettings = parseOidcSettings({
   teamMapping: config.OIDC_TEAM_MAPPING,
   teamGroupPrefix: config.OIDC_TEAM_GROUP_PREFIX,
   sessionMaxAgeHours: config.OIDC_SESSION_MAX_AGE_HOURS,
+  identityMaxAgeHours: config.OIDC_IDENTITY_MAX_AGE_HOURS,
+  revalidateIntervalMinutes: config.OIDC_REVALIDATE_INTERVAL_MINUTES,
   allowInsecureHttp: config.OIDC_ALLOW_INSECURE_HTTP,
   frontendUrl: config.FRONTEND_URL,
 });

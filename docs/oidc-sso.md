@@ -30,11 +30,14 @@ can serve several teams.
 | `OIDC_TEAM_MAPPING` | one of these two | JSON object of `{"<group>": "<team name>"}`. |
 | `OIDC_TEAM_GROUP_PREFIX` | one of these two | Any group starting with this prefix becomes a team named after the rest of the group name, e.g. `hyperdx-payments` → `payments`. |
 | `OIDC_REDIRECT_URI` | no | Defaults to `${FRONTEND_URL}/api/login/oidc/callback`. |
-| `OIDC_SCOPES` | no | Defaults to `openid email profile`. Must include `openid`. |
+| `OIDC_SCOPES` | no | Defaults to `openid email profile offline_access`. Must include `openid`; keep `offline_access` so the IdP issues the refresh token used for [revalidation](#removing-access). |
 | `OIDC_GROUPS_CLAIM` | no | Claim that holds the user's groups. Defaults to `groups`. |
 | `OIDC_DISPLAY_NAME` | no | Shown on the login button ("Sign in with ..."). Defaults to `SSO`. |
-| `OIDC_SESSION_MAX_AGE_HOURS` | no | Absolute lifetime of an SSO session before the user must go back through the IdP. Defaults to `24`; `0` disables the cap (sessions then last up to 30 days, like password sessions). |
-| `PASSWORD_AUTH_DISABLED` | no | `true` turns off password login, registration and invite acceptance. Requires `OIDC_ISSUER_URL`. |
+| `OIDC_SESSION_MAX_AGE_HOURS` | no | Absolute lifetime of a browser session before the user must sign in through the IdP again. Defaults to `24`; `0` disables the cap (sessions then last up to 30 days, like password sessions). |
+| `OIDC_IDENTITY_MAX_AGE_HOURS` | no | How long after the IdP last vouched for a user (at login or by revalidation) their sessions and personal API access key keep working. Defaults to `24`. |
+| `OIDC_REVALIDATE_INTERVAL_MINUTES` | no | How often each user is re-checked with the IdP in the background. Defaults to `15`; `0` turns revalidation off, so users must sign in again every `OIDC_IDENTITY_MAX_AGE_HOURS`. At most a third of the identity max age. |
+| `PASSWORD_AUTH_DISABLED` | no | `true` turns off password login, registration and invite acceptance, and stops sessions and access keys of accounts that never signed in through SSO. Requires `OIDC_ISSUER_URL`. |
+| `TOKEN_ENCRYPTION_KEY` | for revalidation | Refresh tokens are stored only encrypted. Without this key none are stored and revalidation cannot run (generate one with `openssl rand -base64 32`). |
 | `OIDC_ALLOW_INSECURE_HTTP` | no | `true` allows `http://` issuer and redirect URLs. Local testing only. |
 
 The API refuses to start if the OIDC configuration is incomplete or invalid, so
@@ -72,8 +75,9 @@ from that group binds the existing team instead of creating a new one.
 An SSO login whose email matches an existing password account is linked to it
 only when the IdP reports `email_verified: true`. Otherwise it is refused, since
 linking on an unverified email would let anyone who can set that address in the
-IdP take over the account. Once linked, the account is matched by `sub` and the
-password keeps working until you set `PASSWORD_AUTH_DISABLED=true`.
+IdP take over the account. Once linked, the account is matched by `sub`. Its password
+keeps working until you set `PASSWORD_AUTH_DISABLED=true`, but only while the
+IdP still vouches for the user (see [Removing access](#removing-access)).
 
 ## Authentik setup
 
@@ -102,6 +106,8 @@ password keeps working until you set `PASSWORD_AUTH_DISABLED=true`.
    OIDC_CLIENT_SECRET=<client secret>
    OIDC_DISPLAY_NAME=Authentik
    OIDC_TEAM_GROUP_PREFIX=hyperdx-
+   # Needed to store refresh tokens for revalidation:
+   TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
    # After the first admin has signed in through Authentik:
    PASSWORD_AUTH_DISABLED=true
    ```
@@ -114,14 +120,46 @@ Authentik, you can add a custom `email` scope mapping that returns
 
 ## Removing access
 
-HyperDX has no SCIM endpoint, so it learns about IdP changes only when a user
-logs in. When you remove or disable someone in the IdP:
+HyperDX has no SCIM endpoint. Instead, a personal API access key (used by the
+External API and MCP) and every browser session are only valid while the IdP
+keeps vouching for the user:
 
-- Their browser session ends within `OIDC_SESSION_MAX_AGE_HOURS`, after which
-  the IdP refuses the new login.
-- **Their personal API access key (used by the External API and MCP) keeps
-  working until you delete the user in Team settings.** Delete departing users
-  in HyperDX as well as in the IdP.
+1. At login HyperDX stores the user's refresh token, encrypted.
+2. Every `OIDC_REVALIDATE_INTERVAL_MINUTES` it uses that token to ask the IdP
+   about the user again, and re-reads their groups.
+3. If the IdP refuses the token (`invalid_grant`: the user was disabled or
+   deleted, or their IdP session ended), or the user is no longer in a mapped
+   group, their sessions and access key stop working at once.
+4. If the IdP cannot be reached, nobody is revoked. Instead, anyone the IdP has
+   not confirmed for `OIDC_IDENTITY_MAX_AGE_HOURS` loses access until it
+   answers again or they sign in again.
+
+So after you disable someone in the IdP, their key stops working within
+`OIDC_REVALIDATE_INTERVAL_MINUTES` (15 by default). In the worst case, with the
+IdP unreachable, it stops within `OIDC_IDENTITY_MAX_AGE_HOURS`.
+
+A revoked user keeps their access key. If they sign in again, because they
+were re-enabled or only their IdP session had ended, the same key works again,
+so their MCP and API configuration doesn't break.
+
+Every API replica runs the check. Each user is leased while being checked, so
+two replicas never use the same refresh token at once, which IdPs that rotate
+refresh tokens (Authentik does) would treat as token theft.
+
+**Authentik specifics.** Authentik deletes a user's refresh tokens when it
+deactivates them or when their Authentik session ends, and a refreshed ID token
+carries their current groups. Two settings matter:
+
+- The provider's *Refresh Token validity* must be longer than the revalidation
+  interval (the default 30 days is fine).
+- A user's Authentik session length, the *Session duration* on your
+  authentication flow's *User Login* stage, bounds how long their access key
+  works without a browser sign-in. With the default (`seconds=0`, the session
+  ends with the browser), keys stop once that session is gone. Set it to how
+  long you want keys to keep working unattended, e.g. `weeks=4`.
+
+Check the setup by disabling a test user in Authentik and confirming that
+their access key gets `401` within the revalidation interval.
 
 ## What teams do and do not isolate
 

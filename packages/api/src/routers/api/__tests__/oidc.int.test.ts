@@ -26,6 +26,8 @@ jest.mock('@/utils/oidc/config', () => ({
     ],
     teamGroupPrefix: 'hyperdx-',
     sessionMaxAgeMs: 60 * 60 * 1000,
+    identityMaxAgeMs: 24 * 60 * 60 * 1000,
+    revalidateIntervalMs: 15 * 60 * 1000,
     allowInsecureHttp: true,
   },
   isPasswordAuthEnabled: jest.fn(() => true),

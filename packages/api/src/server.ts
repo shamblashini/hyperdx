@@ -4,12 +4,14 @@ import { serializeError } from 'serialize-error';
 
 import app from '@/api-app';
 import * as config from '@/config';
+import { startOidcRevalidation } from '@/controllers/oidcRevalidation';
 import { LOCAL_APP_TEAM } from '@/controllers/team';
 import { runStartupMigrations } from '@/migrations';
 import { connectDBWithRetry, mongooseConnection } from '@/models';
 import opampApp from '@/opamp/app';
 import { setupTeamDefaults } from '@/setupDefaults';
 import logger from '@/utils/logger';
+import { oidcSettings } from '@/utils/oidc/config';
 import { verifySessionSecret } from '@/utils/sessionSecret';
 import { verifyTokenEncryption } from '@/utils/tokenEncryption';
 
@@ -101,6 +103,11 @@ export default class Server {
     await connectDBWithRetry();
 
     await runStartupMigrations();
+
+    // Tests drive revalidation directly instead of on a timer.
+    if (oidcSettings != null && !config.IS_CI) {
+      startOidcRevalidation(oidcSettings);
+    }
 
     // Initialize default connections and sources for local app mode
     if (config.IS_LOCAL_APP_MODE) {

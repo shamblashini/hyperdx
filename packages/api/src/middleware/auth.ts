@@ -8,12 +8,13 @@ import { findUserByAccessKey } from '@/controllers/user';
 import type { UserDocument } from '@/models/user';
 import {
   getActiveTraceId,
+  getCounter,
   getStaticFeatureFlags,
   setBusinessContext,
 } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
 import type { PendingOidcLogin } from '@/utils/oidc/client';
-import { oidcSettings } from '@/utils/oidc/config';
+import { isPasswordAuthEnabled, oidcSettings } from '@/utils/oidc/config';
 
 declare global {
   // Express type augmentation requires `namespace` + interface merging; there is
@@ -105,6 +106,11 @@ export async function validateUserAccessKey(
   if (!user) {
     return res.sendStatus(401);
   }
+  const rejection = getIdentityRejection(user);
+  if (rejection) {
+    identityRejections.add(1, { reason: rejection, auth: 'access_key' });
+    return res.sendStatus(401);
+  }
 
   req.user = user;
 
@@ -134,6 +140,39 @@ function nextWithQueryAttribution(req: Request, next: NextFunction): void {
     },
     () => next(),
   );
+}
+
+const identityRejections = getCounter('hyperdx.auth.identity_rejections', {
+  description:
+    'Authenticated requests refused because the IdP no longer vouches for the user.',
+});
+
+type IdentityRejection = 'oidc_unverified' | 'password_auth_disabled';
+
+/**
+ * Whether the IdP still vouches for this user. Applies to sessions and access
+ * keys alike, which is what closes the gap of a key outliving the user's IdP
+ * account: the key is only as good as the user's last confirmation.
+ */
+export function getIdentityRejection(
+  user: Pick<UserDocument, 'oidcSubject' | 'oidcVerifiedAt'>,
+): IdentityRejection | null {
+  if (oidcSettings == null) {
+    return null;
+  }
+  if (!user.oidcSubject) {
+    // With passwords off, an account the IdP never vouched for has no way to
+    // prove it is still wanted.
+    return isPasswordAuthEnabled() ? null : 'password_auth_disabled';
+  }
+  const verifiedAt = user.oidcVerifiedAt?.getTime();
+  if (
+    verifiedAt == null ||
+    Date.now() - verifiedAt > oidcSettings.identityMaxAgeMs
+  ) {
+    return 'oidc_unverified';
+  }
+  return null;
 }
 
 function isOidcSessionExpired(req: Request) {
@@ -172,7 +211,11 @@ export function isUserAuthenticated(
   }
 
   if (req.isAuthenticated()) {
-    if (isOidcSessionExpired(req)) {
+    const rejection = getIdentityRejection(req.user);
+    if (rejection) {
+      identityRejections.add(1, { reason: rejection, auth: 'session' });
+    }
+    if (rejection || isOidcSessionExpired(req)) {
       // Force a fresh round trip to the IdP so a user disabled or removed from
       // their groups there loses access within the configured window.
       return req.logout(err => {

@@ -83,6 +83,9 @@ export const OIDC_GROUPS_CLAIM = env.OIDC_GROUPS_CLAIM ?? '';
 export const OIDC_TEAM_MAPPING = env.OIDC_TEAM_MAPPING ?? '';
 export const OIDC_TEAM_GROUP_PREFIX = env.OIDC_TEAM_GROUP_PREFIX ?? '';
 export const OIDC_SESSION_MAX_AGE_HOURS = env.OIDC_SESSION_MAX_AGE_HOURS ?? '';
+export const OIDC_IDENTITY_MAX_AGE_HOURS = env.OIDC_IDENTITY_MAX_AGE_HOURS ?? '';
+export const OIDC_REVALIDATE_INTERVAL_MINUTES =
+  env.OIDC_REVALIDATE_INTERVAL_MINUTES ?? '';
 export const OIDC_ALLOW_INSECURE_HTTP = env.OIDC_ALLOW_INSECURE_HTTP === 'true';
 // Turns off email/password login, registration and invite acceptance, so
 // accounts can only come from the OIDC provider.
