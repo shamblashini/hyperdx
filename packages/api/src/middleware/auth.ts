@@ -12,6 +12,8 @@ import {
   setBusinessContext,
 } from '@/utils/instrumentation';
 import logger from '@/utils/logger';
+import type { PendingOidcLogin } from '@/utils/oidc/client';
+import { oidcSettings } from '@/utils/oidc/config';
 
 declare global {
   // Express type augmentation requires `namespace` + interface merging; there is
@@ -30,6 +32,10 @@ declare module 'express-session' {
   interface Session {
     messages: string[]; // Set by passport
     passport: { user: string }; // Set by passport
+    // Between the redirect to the OIDC provider and its callback.
+    oidcLogin?: PendingOidcLogin;
+    // Set when the session was created by an OIDC login.
+    oidcAuthenticatedAt?: number;
   }
 }
 
@@ -130,6 +136,17 @@ function nextWithQueryAttribution(req: Request, next: NextFunction): void {
   );
 }
 
+function isOidcSessionExpired(req: Request) {
+  const authenticatedAt = req.session.oidcAuthenticatedAt;
+  if (authenticatedAt == null || oidcSettings == null) {
+    return false;
+  }
+  if (oidcSettings.sessionMaxAgeMs === 0) {
+    return false;
+  }
+  return Date.now() - authenticatedAt > oidcSettings.sessionMaxAgeMs;
+}
+
 export function isUserAuthenticated(
   req: Request,
   res: Response,
@@ -155,6 +172,17 @@ export function isUserAuthenticated(
   }
 
   if (req.isAuthenticated()) {
+    if (isOidcSessionExpired(req)) {
+      // Force a fresh round trip to the IdP so a user disabled or removed from
+      // their groups there loses access within the configured window.
+      return req.logout(err => {
+        if (err) {
+          return next(err);
+        }
+        res.sendStatus(401);
+      });
+    }
+
     // Attach incident-remediation context to the trace and active span.
     setBusinessContext({
       teamId: req.user?.team?.toString(),

@@ -11,6 +11,7 @@ import TeamInvite from '@/models/teamInvite';
 import User from '@/models/user'; // TODO -> do not import model directly
 import { setupTeamDefaults } from '@/setupDefaults';
 import logger from '@/utils/logger';
+import { isPasswordAuthEnabled, oidcSettings } from '@/utils/oidc/config';
 import passport from '@/utils/passport';
 import { isMongoConnected, mongoReadyStateName } from '@/utils/readiness';
 import { passwordSchema } from '@/utils/validators';
@@ -62,14 +63,37 @@ router.get('/installation', async (_, res: InstallationEspRes, next) => {
     const _isTeamExisting = await isTeamExisting();
     return res.json({
       isTeamExisting: _isTeamExisting,
+      passwordAuthEnabled: isPasswordAuthEnabled(),
+      oidc:
+        oidcSettings == null
+          ? { enabled: false }
+          : { enabled: true, displayName: oidcSettings.displayName },
     });
   } catch (e) {
     next(e);
   }
 });
 
+function rejectWhenPasswordAuthDisabled(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  if (isPasswordAuthEnabled()) {
+    return next();
+  }
+  if (req.accepts(['html', 'json']) === 'json') {
+    return res.status(403).json({ error: 'passwordAuthNotAllowed' });
+  }
+  res.redirect(
+    303,
+    `${config.FRONTEND_REDIRECT_BASE}/login?err=passwordAuthNotAllowed`,
+  );
+}
+
 router.post(
   '/login/password',
+  rejectWhenPasswordAuthDisabled,
   passport.authenticate('local', {
     failWithError: true,
     failureMessage: true,
@@ -80,6 +104,7 @@ router.post(
 
 router.post(
   '/register/password',
+  rejectWhenPasswordAuthDisabled,
   validateRequest({ body: registrationSchema }),
   async (req, res, next) => {
     try {
@@ -149,58 +174,62 @@ router.get('/logout', (req, res, next) => {
 });
 
 // TODO: rename this ?
-router.post('/team/setup/:token', async (req, res, next) => {
-  try {
-    const { password } = req.body;
-    const { token } = req.params;
+router.post(
+  '/team/setup/:token',
+  rejectWhenPasswordAuthDisabled,
+  async (req, res, next) => {
+    try {
+      const { password } = req.body;
+      const { token } = req.params;
 
-    const passwordResult = passwordSchema.safeParse(password);
-    if (!passwordResult.success) {
-      // Emit one `reason` query param per failed requirement so the Join Team
-      // page can render them as a readable list rather than one run-on line.
-      const reasonParams = passwordResult.error.issues
-        .map(issue => `reason=${encodeURIComponent(issue.message)}`)
-        .join('&');
-      return res.redirect(
-        `${config.FRONTEND_REDIRECT_BASE}/join-team?err=invalid&${reasonParams}&token=${token}`,
-      );
-    }
+      const passwordResult = passwordSchema.safeParse(password);
+      if (!passwordResult.success) {
+        // Emit one `reason` query param per failed requirement so the Join Team
+        // page can render them as a readable list rather than one run-on line.
+        const reasonParams = passwordResult.error.issues
+          .map(issue => `reason=${encodeURIComponent(issue.message)}`)
+          .join('&');
+        return res.redirect(
+          `${config.FRONTEND_REDIRECT_BASE}/join-team?err=invalid&${reasonParams}&token=${token}`,
+        );
+      }
 
-    const teamInvite = await TeamInvite.findOne({
-      token: req.params.token,
-    });
-    if (!teamInvite) {
-      return res.status(401).send('Invalid token');
-    }
+      const teamInvite = await TeamInvite.findOne({
+        token: req.params.token,
+      });
+      if (!teamInvite) {
+        return res.status(401).send('Invalid token');
+      }
 
-    (User as any).register(
-      new User({
-        email: teamInvite.email,
-        name: teamInvite.email,
-        team: teamInvite.teamId,
-      }),
-      password,
-      async (err: Error, user: any) => {
-        if (err) {
-          logger.error({ err: serializeError(err) }, 'Team setup error');
-          return res.redirect(
-            `${config.FRONTEND_REDIRECT_BASE}/join-team?token=${token}&err=500`,
-          );
-        }
-
-        await TeamInvite.findByIdAndRemove(teamInvite._id);
-
-        req.login(user, err => {
+      (User as any).register(
+        new User({
+          email: teamInvite.email,
+          name: teamInvite.email,
+          team: teamInvite.teamId,
+        }),
+        password,
+        async (err: Error, user: any) => {
           if (err) {
-            return next(err);
+            logger.error({ err: serializeError(err) }, 'Team setup error');
+            return res.redirect(
+              `${config.FRONTEND_REDIRECT_BASE}/join-team?token=${token}&err=500`,
+            );
           }
-          redirectToDashboard(req, res);
-        });
-      },
-    );
-  } catch (e) {
-    next(e);
-  }
-});
+
+          await TeamInvite.findByIdAndRemove(teamInvite._id);
+
+          req.login(user, err => {
+            if (err) {
+              return next(err);
+            }
+            redirectToDashboard(req, res);
+          });
+        },
+      );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 export default router;

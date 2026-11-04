@@ -102,6 +102,7 @@ if (config.USAGE_STATS_ENABLED && !config.IS_CI) {
 // ---------------------------------------------------------------------
 // PUBLIC ROUTES
 app.use('/', routers.rootRouter);
+app.use('/', routers.oidcRouter);
 
 // SELF-AUTHENTICATED ROUTES (validated via access key, not session middleware)
 app.use('/mcp', mcpRouter);

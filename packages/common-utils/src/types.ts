@@ -3282,6 +3282,14 @@ export type RotateApiKeyApiResponse = z.infer<
 // Installation
 export const InstallationApiResponseSchema = z.object({
   isTeamExisting: z.boolean(),
+  // Optional so a newer app works against an API that predates SSO.
+  passwordAuthEnabled: z.boolean().optional(),
+  oidc: z
+    .discriminatedUnion('enabled', [
+      z.object({ enabled: z.literal(false) }),
+      z.object({ enabled: z.literal(true), displayName: z.string() }),
+    ])
+    .optional(),
 });
 
 export type InstallationApiResponse = z.infer<

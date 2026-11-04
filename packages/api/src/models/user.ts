@@ -15,6 +15,10 @@ export interface IUser {
   createdAt: Date;
   email: string;
   name: string;
+  // Set for users who signed in through OIDC: the provider's issuer and the
+  // stable subject identifier it assigned the user.
+  oidcIssuer?: string;
+  oidcSubject?: string;
   // Optional for docs predating this field; the `me` route defaults it.
   onboardingData?: OnboardingData;
   team: ObjectId;
@@ -30,6 +34,8 @@ const UserSchema = new Schema(
       required: true,
     },
     team: { type: mongoose.Schema.Types.ObjectId, ref: 'Team' },
+    oidcIssuer: String,
+    oidcSubject: String,
     accessKey: {
       type: String,
       default: function genUUID() {
@@ -68,5 +74,12 @@ UserSchema.plugin(passportLocalMongoose, {
 
 UserSchema.index({ email: 1 }, { unique: true });
 UserSchema.index({ accessKey: 1 }, { unique: true });
+UserSchema.index(
+  { oidcIssuer: 1, oidcSubject: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { oidcSubject: { $type: 'string' } },
+  },
+);
 
 export default mongoose.model<IUser>('User', UserSchema);

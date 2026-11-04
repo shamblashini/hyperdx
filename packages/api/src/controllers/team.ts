@@ -58,6 +58,63 @@ export async function createTeam({
   return team;
 }
 
+/**
+ * Returns the team bound to an OIDC group, creating it on first use. Unlike
+ * `createTeam`, this may add a team when others already exist: SSO is how a
+ * self-hosted instance gets more than one team.
+ *
+ * An existing unbound team whose name matches exactly is bound instead of
+ * creating a duplicate, so the team made at password setup can be handed over
+ * to a group by naming it in OIDC_TEAM_MAPPING.
+ */
+export async function findOrCreateTeamForOidcGroup({
+  group,
+  teamName,
+}: {
+  group: string;
+  teamName: string;
+}): Promise<{ team: TeamDocument; created: boolean }> {
+  const bound = await Team.findOne({ oidcGroup: group });
+  if (bound) {
+    return { team: bound, created: false };
+  }
+
+  const unboundByName = await Team.find({
+    name: teamName,
+    oidcGroup: { $exists: false },
+  }).limit(2);
+  if (unboundByName.length === 1) {
+    const claimed = await Team.findOneAndUpdate(
+      { _id: unboundByName[0]._id, oidcGroup: { $exists: false } },
+      { $set: { oidcGroup: group } },
+      { new: true },
+    );
+    if (claimed) {
+      return { team: claimed, created: false };
+    }
+  }
+
+  // Upsert so two first logins racing for the same group end with one team;
+  // the partial unique index on oidcGroup backs this up.
+  const result = await Team.findOneAndUpdate(
+    { oidcGroup: group },
+    {
+      $setOnInsert: {
+        name: teamName,
+        collectorAuthenticationEnforced: true,
+      },
+    },
+    { upsert: true, new: true, rawResult: true, setDefaultsOnInsert: true },
+  );
+  if (result.value == null) {
+    throw new Error(`Failed to provision team for OIDC group ${group}`);
+  }
+  return {
+    team: result.value,
+    created: result.lastErrorObject?.updatedExisting === false,
+  };
+}
+
 export function getAllTeams(fields?: string[]) {
   if (config.IS_LOCAL_APP_MODE) {
     return [LOCAL_APP_TEAM];
@@ -82,7 +139,7 @@ export function getTeam(id: string | ObjectId, fields?: readonly string[]) {
     return LOCAL_APP_TEAM as any;
   }
 
-  return Team.findOne({}, fields);
+  return Team.findById(id, fields);
 }
 
 export function getTeamByApiKey(apiKey: string) {

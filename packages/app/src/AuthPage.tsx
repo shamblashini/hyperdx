@@ -6,16 +6,18 @@ import { HTTPError } from 'ky';
 import { SubmitHandler, useForm, useWatch } from 'react-hook-form';
 import {
   Button,
+  Divider,
   Notification,
   Paper,
   PasswordInput,
   Stack,
   TextInput,
 } from '@mantine/core';
-import { IconAt, IconLock } from '@tabler/icons-react';
+import { IconAt, IconKey, IconLock } from '@tabler/icons-react';
 
 import { useBrandDisplayName, usePageTitle } from './theme/ThemeProvider';
 import api from './api';
+import { getAuthErrorMessage } from './authErrorMessage';
 import * as config from './config';
 import LandingHeader from './LandingHeader';
 import { CheckOrX, PasswordCheck } from './PasswordCheck';
@@ -56,6 +58,9 @@ export default function AuthPage({ action }: { action: 'register' | 'login' }) {
   const registerPassword = api.useRegisterPassword();
 
   const verificationSent = msg === 'verify';
+  const oidc = installation?.oidc?.enabled ? installation.oidc : null;
+  // Treat an API that predates the flag as password-enabled.
+  const passwordAuthEnabled = installation?.passwordAuthEnabled !== false;
   const title = usePageTitle(isRegister ? 'Sign up' : 'Login');
 
   useEffect(() => {
@@ -151,70 +156,87 @@ export default function AuthPage({ action }: { action: 'register' | 'login' }) {
           )}
           <form className="text-start mt-4" {...form.controller}>
             <Stack gap="xl">
-              <Paper p={34} shadow="md" radius="md">
-                <Stack gap="lg">
-                  <TextInput
-                    label="Email"
-                    size="md"
-                    withAsterisk={false}
-                    placeholder="you@company.com"
-                    type="email"
-                    leftSection={<IconAt size={18} />}
-                    error={errors.email?.message}
-                    required
-                    {...form.email}
-                  />
-                  <PasswordInput
-                    size="md"
-                    label="Password"
-                    withAsterisk={false}
-                    leftSection={<IconLock size={16} />}
-                    error={errors.password?.message}
-                    required
-                    placeholder="Password"
-                    {...form.password}
-                  />
-                  {isRegister && (
-                    <>
-                      <PasswordInput
-                        label={
-                          <CheckOrX
-                            handler={confirmPass}
-                            password={currentPassword}
-                          >
-                            Confirm Password
-                          </CheckOrX>
-                        }
-                        size="md"
-                        required
-                        withAsterisk={false}
-                        leftSection={<IconLock size={16} />}
-                        error={errors.confirmPassword?.message}
-                        placeholder="Confirm Password"
-                        {...form.confirmPassword}
-                      />
-                      <Notification withCloseButton={false}>
-                        <PasswordCheck password={currentPassword} />
-                      </Notification>
-                    </>
-                  )}
-                  <Button
-                    mt={4}
-                    type="submit"
-                    variant="primary"
-                    size="md"
-                    disabled={isSubmitting || verificationSent}
-                    loading={isSubmitting}
-                    data-test-id="submit"
-                  >
-                    {config.IS_OSS && isRegister
-                      ? 'Create'
-                      : isRegister
-                        ? 'Register'
-                        : 'Login'}
-                  </Button>
-                </Stack>
-              </Paper>
+              {oidc && (
+                <Button
+                  component="a"
+                  href="/api/login/oidc"
+                  variant={passwordAuthEnabled ? 'secondary' : 'primary'}
+                  size="md"
+                  leftSection={<IconKey size={18} />}
+                  data-test-id="oidc-login"
+                >
+                  Sign in with {oidc.displayName}
+                </Button>
+              )}
+              {oidc && passwordAuthEnabled && (
+                <Divider label="or" labelPosition="center" />
+              )}
+              {passwordAuthEnabled && (
+                <Paper p={34} shadow="md" radius="md">
+                  <Stack gap="lg">
+                    <TextInput
+                      label="Email"
+                      size="md"
+                      withAsterisk={false}
+                      placeholder="you@company.com"
+                      type="email"
+                      leftSection={<IconAt size={18} />}
+                      error={errors.email?.message}
+                      required
+                      {...form.email}
+                    />
+                    <PasswordInput
+                      size="md"
+                      label="Password"
+                      withAsterisk={false}
+                      leftSection={<IconLock size={16} />}
+                      error={errors.password?.message}
+                      required
+                      placeholder="Password"
+                      {...form.password}
+                    />
+                    {isRegister && (
+                      <>
+                        <PasswordInput
+                          label={
+                            <CheckOrX
+                              handler={confirmPass}
+                              password={currentPassword}
+                            >
+                              Confirm Password
+                            </CheckOrX>
+                          }
+                          size="md"
+                          required
+                          withAsterisk={false}
+                          leftSection={<IconLock size={16} />}
+                          error={errors.confirmPassword?.message}
+                          placeholder="Confirm Password"
+                          {...form.confirmPassword}
+                        />
+                        <Notification withCloseButton={false}>
+                          <PasswordCheck password={currentPassword} />
+                        </Notification>
+                      </>
+                    )}
+                    <Button
+                      mt={4}
+                      type="submit"
+                      variant="primary"
+                      size="md"
+                      disabled={isSubmitting || verificationSent}
+                      loading={isSubmitting}
+                      data-test-id="submit"
+                    >
+                      {config.IS_OSS && isRegister
+                        ? 'Create'
+                        : isRegister
+                          ? 'Register'
+                          : 'Login'}
+                    </Button>
+                  </Stack>
+                </Paper>
+              )}
 
               {err != null && (
                 <Notification
@@ -223,17 +245,7 @@ export default function AuthPage({ action }: { action: 'register' | 'login' }) {
                   color="red"
                   data-test-id="auth-error-msg"
                 >
-                  {err === 'missing'
-                    ? 'Please provide a valid email and password'
-                    : err === 'invalid'
-                      ? 'Email or password is invalid'
-                      : err === 'authFail'
-                        ? 'Failed to login with email and password, please try again.'
-                        : err === 'passwordAuthNotAllowed'
-                          ? 'Password authentication is not allowed by your team admin.'
-                          : err === 'teamAlreadyExists'
-                            ? 'Team already exists, please login instead.'
-                            : 'Unknown error occurred, please try again later.'}
+                  {getAuthErrorMessage(err)}
                 </Notification>
               )}
 

@@ -71,6 +71,23 @@ export const DEFAULT_SOURCES = env.DEFAULT_SOURCES;
 
 export const IS_PROMQL_ENABLED = env.ENABLE_PROMQL === 'true';
 
+// OpenID Connect single sign-on. Setting OIDC_ISSUER_URL turns it on; the
+// remaining values are validated in utils/oidc/config.ts.
+export const OIDC_ISSUER_URL = env.OIDC_ISSUER_URL ?? '';
+export const OIDC_CLIENT_ID = env.OIDC_CLIENT_ID ?? '';
+export const OIDC_CLIENT_SECRET = env.OIDC_CLIENT_SECRET ?? '';
+export const OIDC_REDIRECT_URI = env.OIDC_REDIRECT_URI ?? '';
+export const OIDC_SCOPES = env.OIDC_SCOPES ?? '';
+export const OIDC_DISPLAY_NAME = env.OIDC_DISPLAY_NAME ?? '';
+export const OIDC_GROUPS_CLAIM = env.OIDC_GROUPS_CLAIM ?? '';
+export const OIDC_TEAM_MAPPING = env.OIDC_TEAM_MAPPING ?? '';
+export const OIDC_TEAM_GROUP_PREFIX = env.OIDC_TEAM_GROUP_PREFIX ?? '';
+export const OIDC_SESSION_MAX_AGE_HOURS = env.OIDC_SESSION_MAX_AGE_HOURS ?? '';
+export const OIDC_ALLOW_INSECURE_HTTP = env.OIDC_ALLOW_INSECURE_HTTP === 'true';
+// Turns off email/password login, registration and invite acceptance, so
+// accounts can only come from the OIDC provider.
+export const PASSWORD_AUTH_DISABLED = env.PASSWORD_AUTH_DISABLED === 'true';
+
 export const EXTERNAL_API_RATE_LIMIT_MAX = (() => {
   const parsed = Number(env.EXTERNAL_API_RATE_LIMIT_MAX);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 100;

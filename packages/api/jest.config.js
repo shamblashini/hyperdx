@@ -25,6 +25,9 @@ module.exports = {
   moduleNameMapper: {
     '@/(.*)$': '<rootDir>/$1',
   },
-  // Keep in sync with jest.int.config.js.
-  transformIgnorePatterns: ['/node_modules/(?!(ai|@ai-sdk|@workflow/serde)/)'],
+  // Keep in sync with jest.int.config.js. openid-client and its deps are
+  // ESM-only too.
+  transformIgnorePatterns: [
+    '/node_modules/(?!(ai|@ai-sdk|@workflow/serde|openid-client|oauth4webapi|jose)/)',
+  ],
 };

@@ -36,6 +36,10 @@ also replaced with a per-process secret when authentication is enabled.
 To customize the frontend URL, set the `FRONTEND_URL` environment variable to
 the URL your HyperDX instance is hosted on.
 
+To sign users in through an OpenID Connect provider such as Authentik or
+Keycloak, and to provision a team per IdP group, see
+[Single sign-on with OpenID Connect](docs/oidc-sso.md).
+
 ## All-in-one Docker Compose Stack
 
 The easiest way to get started with HyperDX from scratch is to use our

@@ -83,6 +83,18 @@ services:
       # tokens; unset means they are stored in plain text.
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
       EXPRESS_SESSION_SECRET: ${EXPRESS_SESSION_SECRET:-}
+      # OpenID Connect single sign-on. See docs/oidc-sso.md.
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-}
+      OIDC_DISPLAY_NAME: ${OIDC_DISPLAY_NAME:-}
+      OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM:-}
+      OIDC_TEAM_MAPPING: ${OIDC_TEAM_MAPPING:-}
+      OIDC_TEAM_GROUP_PREFIX: ${OIDC_TEAM_GROUP_PREFIX:-}
+      OIDC_SESSION_MAX_AGE_HOURS: ${OIDC_SESSION_MAX_AGE_HOURS:-}
+      PASSWORD_AUTH_DISABLED: ${PASSWORD_AUTH_DISABLED:-}
       # Uncomment the next two lines to enable PromQL (Prometheus-compatible metrics)
       # ENABLE_PROMQL: 'true'
       # NEXT_PUBLIC_ENABLE_PROMQL: 'true'
