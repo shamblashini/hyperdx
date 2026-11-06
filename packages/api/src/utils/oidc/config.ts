@@ -18,7 +18,7 @@ const TeamMappingSchema = z
     Object.entries(record).map(([group, teamName]) => ({ group, teamName })),
   );
 
-export type TeamMappingEntry = z.output<typeof TeamMappingSchema>[number];
+type TeamMappingEntry = z.output<typeof TeamMappingSchema>[number];
 
 export type OidcSettings = {
   issuerUrl: URL;

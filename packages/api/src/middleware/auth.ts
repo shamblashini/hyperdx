@@ -154,7 +154,7 @@ type IdentityRejection = 'oidc_unverified' | 'password_auth_disabled';
  * keys alike, which is what closes the gap of a key outliving the user's IdP
  * account: the key is only as good as the user's last confirmation.
  */
-export function getIdentityRejection(
+function getIdentityRejection(
   user: Pick<UserDocument, 'oidcSubject' | 'oidcVerifiedAt'>,
 ): IdentityRejection | null {
   if (oidcSettings == null) {
