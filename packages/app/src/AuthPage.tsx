@@ -15,9 +15,9 @@ import {
 } from '@mantine/core';
 import { IconAt, IconKey, IconLock } from '@tabler/icons-react';
 
-import { useBrandDisplayName, usePageTitle } from './theme/ThemeProvider';
 import api from './api';
 import { getAuthErrorMessage } from './authErrorMessage';
+import { useBrandDisplayName, usePageTitle } from './brand';
 import * as config from './config';
 import LandingHeader from './LandingHeader';
 import { CheckOrX, PasswordCheck } from './PasswordCheck';
