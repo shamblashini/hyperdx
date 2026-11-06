@@ -1,0 +1,152 @@
+name: Fork Release
+# Builds this fork's images and pushes them to the GitHub Container Registry of
+# the repository owner (ghcr.io/<owner>/...), authenticated with the workflow's
+# own GITHUB_TOKEN, so it needs no secrets.
+#
+# The upstream release workflows (release.yml, release-nightly.yml) cannot run
+# here: they push to the hyperdx/* and clickhouse/* Docker Hub repositories
+# with ClickHouse's credentials, and their app builds target ClickHouse's
+# private large runners. The build settings below mirror docker-build.yml,
+# which upstream runs on standard runners.
+#
+# Run it from the Actions tab ("Run workflow"), or push a tag starting with
+# fork-v. Images are tagged <app version>-oidc.<short sha>; runs from main or a
+# tag also move `latest`.
+on:
+  workflow_dispatch:
+    inputs:
+      all_in_one:
+        description:
+          Also build the all-in-one image (ClickHouse, MongoDB and the
+          collector bundled; adds about 15 minutes)
+        type: boolean
+        default: false
+  push:
+    tags: ['fork-v*']
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+  packages: write
+jobs:
+  meta:
+    name: Resolve version and images
+    # Never run in the upstream repository if this file is ever contributed.
+    if: github.repository != 'hyperdxio/hyperdx'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      registry: ${{ steps.meta.outputs.registry }}
+      latest: ${{ steps.meta.outputs.latest }}
+      matrix: ${{ steps.meta.outputs.matrix }}
+      images: ${{ steps.meta.outputs.images }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Resolve
+        id: meta
+        env:
+          ALL_IN_ONE: ${{ github.event_name == 'push' || inputs.all_in_one }}
+          REF: ${{ github.ref }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          version=$(jq -r .version packages/app/package.json)
+          tag="${version}-oidc.${GITHUB_SHA::7}"
+          # Registry paths must be lowercase; GitHub owner names need not be.
+          registry="ghcr.io/${OWNER,,}"
+          latest=false
+          if [[ "$REF" == refs/heads/main || "$REF" == refs/tags/* ]]; then
+            latest=true
+          fi
+          targets='[{"image":"hyperdx","target":"prod"}]'
+          if [[ "$ALL_IN_ONE" == true ]]; then
+            targets='[{"image":"hyperdx","target":"prod"},{"image":"hyperdx-all-in-one","target":"all-in-one-auth"}]'
+          fi
+          arches='[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-24.04"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]'
+          matrix=$(jq -cn --argjson t "$targets" --argjson a "$arches" \
+            '{include: [$t[] as $x | $a[] as $y | $x + $y]}')
+          {
+            echo "tag=$tag"
+            echo "registry=$registry"
+            echo "latest=$latest"
+            echo "matrix=$matrix"
+            echo "images=$(jq -c '[.[].image]' <<<"$targets")"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $(jq -r '[.[].image] | join(", ")' <<<"$targets") as $registry/<image>:$tag (latest: $latest)" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.image }} (${{ matrix.arch }})
+    needs: meta
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.meta.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/hyperdx/Dockerfile
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-contexts: |
+            clickhouse=./docker/clickhouse
+            otel-collector=./docker/otel-collector
+            hyperdx=./docker/hyperdx
+            api=./packages/api
+            app=./packages/app
+          build-args: |
+            CODE_VERSION=${{ needs.meta.outputs.tag }}
+          tags: |
+            ${{ needs.meta.outputs.registry }}/${{ matrix.image }}:${{ needs.meta.outputs.tag }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.tag }}
+          cache-from: type=gha,scope=fork-${{ matrix.target }}-${{ matrix.arch }}
+          cache-to:
+            type=gha,mode=max,scope=fork-${{ matrix.target }}-${{ matrix.arch }}
+
+  publish:
+    name: Publish multi-arch manifests
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create manifests
+        env:
+          REGISTRY: ${{ needs.meta.outputs.registry }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          LATEST: ${{ needs.meta.outputs.latest }}
+          IMAGES: ${{ needs.meta.outputs.images }}
+        run: |
+          for image in $(jq -r '.[]' <<<"$IMAGES"); do
+            ref="$REGISTRY/$image"
+            tags=(-t "$ref:$TAG")
+            if [[ "$LATEST" == true ]]; then
+              tags+=(-t "$ref:latest")
+            fi
+            docker buildx imagetools create "${tags[@]}" \
+              "$ref:$TAG-amd64" "$ref:$TAG-arm64"
+            echo "- \`$ref:$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          done
